@@ -30,6 +30,7 @@ import * as iframeUtils from "metabase/utils/iframe";
 import type {
   Bookmark,
   Card,
+  Collection,
   Dashboard,
   DashboardId,
   ModelResult,
@@ -73,6 +74,8 @@ export type SetupOpts = {
   hasEmbeddingFeature?: boolean;
   applicationName?: string;
   activeUsersCount?: number;
+  /** Top-level collections of the tree, with their descendants in `children` */
+  collections?: Collection[];
 };
 
 export const PERSONAL_COLLECTION_BASE = createMockCollection({
@@ -94,6 +97,13 @@ export const TEST_COLLECTION = createMockCollection({
   children: [NESTED_COLLECTION],
 });
 
+function flattenCollections(collections: Collection[]): Collection[] {
+  return collections.flatMap((collection) => [
+    collection,
+    ...flattenCollections(collection.children ?? []),
+  ]);
+}
+
 export async function setup({
   pathname = "/",
   route = pathname,
@@ -114,6 +124,7 @@ export async function setup({
   hasWhitelabelToken,
   hasEmbeddingFeature,
   applicationName = "Metabase",
+  collections: topLevelCollections = [TEST_COLLECTION],
 }: SetupOpts = {}) {
   if (isEmbeddingIframe) {
     jest.spyOn(iframeUtils, "isWithinIframe").mockReturnValue(true);
@@ -146,7 +157,7 @@ export async function setup({
     can_write: user?.is_superuser || canCurateRootCollection,
   });
 
-  const collections = [TEST_COLLECTION];
+  const collections = [...topLevelCollections];
 
   const personalCollection = user
     ? createMockCollection({
@@ -166,7 +177,10 @@ export async function setup({
     currentUserId: user?.id,
   });
   setupCollectionByIdEndpoint({
-    collections: [PERSONAL_COLLECTION_BASE, TEST_COLLECTION, NESTED_COLLECTION],
+    collections: [
+      PERSONAL_COLLECTION_BASE,
+      ...flattenCollections(topLevelCollections),
+    ],
   });
   setupDatabasesEndpoints(databases);
   setupSearchEndpoints(models);
