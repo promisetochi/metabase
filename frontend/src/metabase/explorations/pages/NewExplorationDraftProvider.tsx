@@ -3,15 +3,19 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
 import { useMetabotAgent } from "metabase/metabot/hooks";
 import { Outlet, useLocation, useNavigationType } from "metabase/router";
 import * as Urls from "metabase/urls";
+import type { ResearchPlanSeed } from "metabase-types/api";
 
 import { EXPLORATIONS_AGENT_ID } from "../components/NewExplorationChat/NewExplorationChat";
 import { type ExplorationSelection, useExplorationSelection } from "../hooks";
+import { getResearchPlanSeed } from "../research-plan-seed";
+import { indexDimensionsById } from "../utils";
 
 const NewExplorationDraftContext = createContext<ExplorationSelection | null>(
   null,
@@ -60,12 +64,60 @@ export function NewExplorationDraftProvider(props: {
 
 function NewExplorationDraft({ children }: { children?: ReactNode }) {
   const selection = useExplorationSelection();
+  const { addMetric, setName } = selection;
+  const location = useLocation();
+  const seed = getResearchPlanSeed(location.state);
+  const appliedSeed = useRef<ResearchPlanSeed | null>(null);
 
-  const { createNewConversation } = useMetabotAgent(EXPLORATIONS_AGENT_ID);
+  // The question a chart opened the plan with, until it has been sent.
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  const hasBlocks = selection.blocks.length > 0;
+
+  const { createNewConversation, submitInput } = useMetabotAgent(
+    EXPLORATIONS_AGENT_ID,
+  );
 
   useEffect(() => {
     createNewConversation();
   }, [createNewConversation]);
+
+  // A plan opened from a dashboard chart starts with that chart's metric, scoped
+  // to the clicked point, and no dimensions picked: Metabot chooses them from the
+  // question. Declared after the effect above, which clears the conversation, so
+  // it runs after it.
+  useEffect(() => {
+    if (seed == null || appliedSeed.current === seed) {
+      return;
+    }
+    appliedSeed.current = seed;
+    const dimensionsById = indexDimensionsById(seed.dimension_groups);
+    for (const metric of seed.metrics) {
+      addMetric(metric, {
+        dimensionsById,
+        exploreFilters: seed.explore_filters,
+        // Without a question there is nothing for Metabot to choose from (and no
+        // Metabot at all when no AI provider is set up), so keep the defaults.
+        withoutDefaultDimensions: seed.question != null,
+      });
+    }
+    setName(seed.name);
+    setPendingQuestion(seed.question);
+  }, [seed, addMetric, setName]);
+
+  // The question is sent in a later render than the one that adds the block: the
+  // send goes to the conversation of the render it runs in, which has to be the
+  // new one, and Metabot reads the plan as it is then, which has to include the
+  // block.
+  useEffect(() => {
+    if (pendingQuestion == null || !hasBlocks) {
+      return;
+    }
+    setPendingQuestion(null);
+    submitInput(pendingQuestion, {
+      preventOpenSidebar: true,
+      profile: "explorations",
+    });
+  }, [pendingQuestion, hasBlocks, submitInput]);
 
   return (
     <NewExplorationDraftContext.Provider value={selection}>

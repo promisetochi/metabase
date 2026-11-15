@@ -18,6 +18,7 @@ import type { ExplorationCollection } from "metabase/explorations/types";
 import { useSelector } from "metabase/redux";
 import type {
   DimensionId,
+  ExplorationExploreFilter,
   ExplorationMetric,
   MetricDimension,
   Timeline,
@@ -28,6 +29,8 @@ export interface ExplorationBlock {
   metric: ExplorationMetric;
   dimensions: MetricDimension[]; // sorted by interestingness
   selectedDimensionIds: Set<DimensionId>;
+  // Scopes the metric to a segment, e.g. the chart point a plan was opened from.
+  exploreFilters?: ExplorationExploreFilter[];
 }
 
 export function metricBlockId(metricId: ExplorationMetric["id"]): string {
@@ -41,6 +44,11 @@ export interface ToggleMetricContext {
   // interesting defaults. Used when the agent wants the metric sliced by only the dimensions it
   // names. Requires a non-empty `additionalSelectedDimensionIds`.
   replace?: boolean;
+  // Scope a new block to a segment. Ignored when the metric already has a block.
+  exploreFilters?: ExplorationExploreFilter[];
+  // Start a new block with no dimensions picked, for the agent to choose. Asking later for the
+  // same metric without naming dimensions then picks the interesting defaults.
+  withoutDefaultDimensions?: boolean;
 }
 
 export interface ExplorationSelection {
@@ -60,6 +68,7 @@ export interface ExplorationSelection {
   removeTimelinesById: (timelineIds: number[]) => void;
   removeBlock: (blockId: string) => void;
   removeBlockDimensions: (blockId: string, dimensionIds: DimensionId[]) => void;
+  removeBlockFilter: (blockId: string, filterIndex: number) => void;
   toggleDimensionSelected: (blockId: string, dimensionId: DimensionId) => void;
 }
 
@@ -72,11 +81,20 @@ function sortDimensionsByInterestingness(
   );
 }
 
+// The dimensions worth a chart: the interesting ones, or all of them when none is, so a block
+// with candidates is never left with an empty selection (BE rejects a metric with no dims).
+function defaultDimensions(dimensions: MetricDimension[]): MetricDimension[] {
+  const interesting = dimensions.filter(isInterestingDimension);
+  return interesting.length > 0 ? interesting : dimensions;
+}
+
 function buildExplorationBlock(
   metric: ExplorationMetric,
   dimensionsById: Map<DimensionId, MetricDimension>,
   additionalSelectedDimensionIds?: Set<DimensionId>,
   replace?: boolean,
+  exploreFilters?: ExplorationExploreFilter[],
+  withoutDefaultDimensions?: boolean,
 ): ExplorationBlock {
   const referencedDims = sortDimensionsByInterestingness(
     metric.dimension_ids
@@ -92,10 +110,9 @@ function buildExplorationBlock(
     // Pin the block to exactly the requested dimensions (no interesting defaults).
     selectedDimensionIds = new Set(requested.map((d) => d.id));
   } else {
-    const interesting = referencedDims.filter(isInterestingDimension);
-    // Select the interesting dimensions; fall back to all so the block is
-    // never created with an empty selection (BE rejects a metric with no dims).
-    const base = interesting.length > 0 ? interesting : referencedDims;
+    const base = withoutDefaultDimensions
+      ? []
+      : defaultDimensions(referencedDims);
     selectedDimensionIds = new Set(base.map((d) => d.id));
     // Add the explicitly-requested dimensions on top of the interesting defaults.
     for (const d of requested) {
@@ -107,6 +124,7 @@ function buildExplorationBlock(
     metric,
     dimensions: referencedDims,
     selectedDimensionIds,
+    ...(exploreFilters?.length ? { exploreFilters } : {}),
   };
 }
 
@@ -155,6 +173,8 @@ export function useExplorationSelection(): ExplorationSelection {
         dimensionsById,
         additionalSelectedDimensionIds,
         replace,
+        exploreFilters,
+        withoutDefaultDimensions,
       }: ToggleMetricContext,
     ) => {
       setBlocks((prevBlocks) => {
@@ -162,9 +182,21 @@ export function useExplorationSelection(): ExplorationSelection {
         if (existing) {
           // Create-or-grow: the block already exists, so union the explicitly-requested
           // dimensions into its selection (never deselects). With no explicit dimensions there is
-          // nothing to add, so this is a no-op.
+          // nothing to add, so this is a no-op, except for a block that was started with none
+          // picked, which gets the interesting defaults.
           if (!additionalSelectedDimensionIds?.size) {
-            return prevBlocks;
+            if (existing.selectedDimensionIds.size > 0) {
+              return prevBlocks;
+            }
+            const defaults = defaultDimensions(existing.dimensions);
+            return prevBlocks.map((b) =>
+              b === existing
+                ? {
+                    ...existing,
+                    selectedDimensionIds: new Set(defaults.map((d) => d.id)),
+                  }
+                : b,
+            );
           }
           const candidateIds = new Set(existing.dimensions.map((d) => d.id));
           const selected = new Set(existing.selectedDimensionIds);
@@ -189,6 +221,8 @@ export function useExplorationSelection(): ExplorationSelection {
             dimensionsById,
             additionalSelectedDimensionIds,
             replace,
+            exploreFilters,
+            withoutDefaultDimensions,
           ),
         ];
       });
@@ -261,6 +295,26 @@ export function useExplorationSelection(): ExplorationSelection {
     [],
   );
 
+  const removeBlockFilter = useCallback(
+    (blockId: string, filterIndex: number) => {
+      setBlocks((prev) =>
+        prev.map((block) => {
+          if (block.id !== blockId || !block.exploreFilters) {
+            return block;
+          }
+          const remaining = block.exploreFilters.filter(
+            (_filter, index) => index !== filterIndex,
+          );
+          return {
+            ...block,
+            exploreFilters: remaining.length > 0 ? remaining : undefined,
+          };
+        }),
+      );
+    },
+    [],
+  );
+
   const toggleDimensionSelected = useCallback(
     (blockId: string, dimensionId: DimensionId) => {
       setBlocks((prev) =>
@@ -298,6 +352,7 @@ export function useExplorationSelection(): ExplorationSelection {
     removeTimelinesById,
     removeBlock,
     removeBlockDimensions,
+    removeBlockFilter,
     toggleDimensionSelected,
   };
 }

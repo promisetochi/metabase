@@ -31,6 +31,7 @@ import * as Urls from "metabase/urls";
 import type {
   CollectionId,
   CreateExplorationRequest,
+  ExplorationExploreFilter,
   ExplorationMetric,
   MetricDimension,
   Timeline,
@@ -50,10 +51,14 @@ export interface NewExplorationDataProps {
   selection: ExplorationSelection;
 }
 
-function metricToSelection(m: ExplorationMetric) {
+function metricToSelection(
+  m: ExplorationMetric,
+  exploreFilters: ExplorationExploreFilter[] = [],
+) {
   return {
     card_id: m.id,
     dimension_mappings: m.dimension_mappings,
+    ...(exploreFilters.length > 0 ? { explore_filters: exploreFilters } : {}),
   };
 }
 
@@ -68,7 +73,7 @@ function dimensionToSelection(d: MetricDimension) {
 
 function blockToSelection(block: ExplorationBlock) {
   return {
-    metrics: [metricToSelection(block.metric)],
+    metrics: [metricToSelection(block.metric, block.exploreFilters)],
     dimensions: block.dimensions
       .filter((d) => block.selectedDimensionIds.has(d.id))
       .map(dimensionToSelection),
@@ -101,6 +106,7 @@ export function NewExplorationData({ selection }: NewExplorationDataProps) {
     name,
     collection,
     removeBlock,
+    removeBlockFilter,
     toggleDimensionSelected,
     removeTimelinesById,
   } = selection;
@@ -115,10 +121,22 @@ export function NewExplorationData({ selection }: NewExplorationDataProps) {
   const [createExploration, { isLoading: isStarting }] =
     useCreateExplorationMutation();
 
-  const { messages, isDoingScience } = useMetabotAgent(EXPLORATIONS_AGENT_ID);
-  const hasUserPrompt = messages.some(
-    (message) => message.role === "user" && getPromptText(message).trim(),
-  );
+  const {
+    messages,
+    isDoingScience,
+    prompt: unsentPrompt,
+  } = useMetabotAgent(EXPLORATIONS_AGENT_ID);
+  const sentPrompts = messages
+    .filter((message) => message.role === "user")
+    .map(getPromptText)
+    .filter((text) => text.trim());
+  // A question put in the chat box but not sent yet (such as the one a plan opened
+  // from a chart starts with) still tells the AI what to look for.
+  const questions =
+    sentPrompts.length > 0
+      ? sentPrompts
+      : [unsentPrompt].filter((text) => text.trim());
+  const hasUserPrompt = questions.length > 0;
   const canStart = blocks.some(isNonEmptyBlock);
 
   const isManualDataPickingDisabled = isDoingScience;
@@ -158,10 +176,7 @@ export function NewExplorationData({ selection }: NewExplorationDataProps) {
   const handleStart = useCallback(async () => {
     const prompt =
       hasUserPrompt && useContextualInterestingness
-        ? messages
-            .filter((message) => message.role === "user")
-            .map(getPromptText)
-            .join("\n---\n")
+        ? questions.join("\n---\n")
         : "";
     const request = buildCreateExplorationRequest(
       name,
@@ -186,7 +201,7 @@ export function NewExplorationData({ selection }: NewExplorationDataProps) {
     navigate,
     hasUserPrompt,
     useContextualInterestingness,
-    messages,
+    questions,
     blocks,
     timelines,
     name,
@@ -274,6 +289,10 @@ export function NewExplorationData({ selection }: NewExplorationDataProps) {
                 onToggleDimension={(dimensionId) => {
                   toggleDimensionSelected(block.id, dimensionId);
                   trackExplorationPlanEdited("manual", "dimensions");
+                }}
+                onRemoveFilter={(filterIndex) => {
+                  removeBlockFilter(block.id, filterIndex);
+                  trackExplorationPlanEdited("manual", "metrics");
                 }}
               />
             ))}

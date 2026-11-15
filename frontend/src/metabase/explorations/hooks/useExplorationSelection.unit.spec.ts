@@ -7,6 +7,7 @@ import { getUserPersonalCollectionId } from "metabase/current-user";
 import { useSelector } from "metabase/redux";
 import type {
   DimensionId,
+  ExplorationExploreFilter,
   ExplorationMetric,
   MetricDimension,
   Timeline,
@@ -120,6 +121,115 @@ describe("useExplorationSelection", () => {
       expect(firstBlockOf(result).dimensions.map((d) => d.id)).toEqual([
         "dim-high",
         "dim-mid",
+        "dim-low",
+      ]);
+    });
+
+    it("scopes a new block to the filters it is added with", () => {
+      const dim = makeDim("dim-a", 0.9);
+      const metric = makeMetric(1, ["dim-a"]);
+      const dimensionsById = makeDimensionsById([dim]);
+      const exploreFilters: ExplorationExploreFilter[] = [
+        {
+          operator: "=",
+          field_ref: ["field", 1, null],
+          value: "Gadget",
+          display_value: "Gadget",
+        },
+      ];
+
+      const { result } = renderSelection();
+
+      act(() => {
+        result.current.addMetric(metric, { dimensionsById, exploreFilters });
+      });
+
+      expect(firstBlockOf(result).exploreFilters).toEqual(exploreFilters);
+    });
+
+    it("leaves a block without filters unscoped", () => {
+      const dim = makeDim("dim-a", 0.9);
+      const metric = makeMetric(1, ["dim-a"]);
+
+      const { result } = renderSelection();
+
+      act(() => {
+        result.current.addMetric(metric, {
+          dimensionsById: makeDimensionsById([dim]),
+          exploreFilters: [],
+        });
+      });
+
+      expect(firstBlockOf(result).exploreFilters).toBeUndefined();
+    });
+
+    it("starts a block with no dimensions picked when asked to, keeping them as candidates", () => {
+      const dimHigh = makeDim("dim-high", 0.9);
+      const dimLow = makeDim("dim-low", 0.3);
+      const metric = makeMetric(1, ["dim-high", "dim-low"]);
+
+      const { result } = renderSelection();
+
+      act(() => {
+        result.current.addMetric(metric, {
+          dimensionsById: makeDimensionsById([dimHigh, dimLow]),
+          withoutDefaultDimensions: true,
+        });
+      });
+
+      const block = firstBlockOf(result);
+      expect(block.dimensions.map((d) => d.id)).toEqual([
+        "dim-high",
+        "dim-low",
+      ]);
+      expect(block.selectedDimensionIds.size).toBe(0);
+    });
+
+    it("picks the interesting defaults when an empty block is asked for again without dimensions", () => {
+      const dimHigh = makeDim("dim-high", 0.9);
+      const dimLow = makeDim("dim-low", 0.3);
+      const metric = makeMetric(1, ["dim-high", "dim-low"]);
+      const dimensionsById = makeDimensionsById([dimHigh, dimLow]);
+
+      const { result } = renderSelection();
+      act(() => {
+        result.current.addMetric(metric, {
+          dimensionsById,
+          withoutDefaultDimensions: true,
+        });
+      });
+
+      act(() => {
+        result.current.addMetric(metric, { dimensionsById });
+      });
+
+      expect([...firstBlockOf(result).selectedDimensionIds]).toEqual([
+        "dim-high",
+      ]);
+    });
+
+    it("adds only the named dimensions to an empty block", () => {
+      const dimHigh = makeDim("dim-high", 0.9);
+      const dimLow = makeDim("dim-low", 0.3);
+      const metric = makeMetric(1, ["dim-high", "dim-low"]);
+      const dimensionsById = makeDimensionsById([dimHigh, dimLow]);
+
+      const { result } = renderSelection();
+      act(() => {
+        result.current.addMetric(metric, {
+          dimensionsById,
+          withoutDefaultDimensions: true,
+        });
+      });
+
+      act(() => {
+        result.current.addMetric(metric, {
+          dimensionsById,
+          additionalSelectedDimensionIds: new Set(["dim-low"]),
+        });
+      });
+
+      expect([...firstBlockOf(result).selectedDimensionIds]).toEqual([
         "dim-low",
       ]);
     });
@@ -290,6 +400,48 @@ describe("useExplorationSelection", () => {
       expect([...firstBlockOf(result).selectedDimensionIds]).toEqual([
         "dim-low",
       ]);
+    });
+  });
+
+  describe("removeBlockFilter", () => {
+    const filter = (value: string): ExplorationExploreFilter => ({
+      operator: "=",
+      field_ref: ["field", 1, null],
+      value,
+      display_value: value,
+    });
+
+    function renderScoped(exploreFilters: ExplorationExploreFilter[]) {
+      const dim = makeDim("dim-a", 0.9);
+      const { result } = renderSelection();
+      act(() => {
+        result.current.addMetric(makeMetric(1, ["dim-a"]), {
+          dimensionsById: makeDimensionsById([dim]),
+          exploreFilters,
+        });
+      });
+      return { result };
+    }
+
+    it("removes the filter at the index, keeping the others", () => {
+      const { result } = renderScoped([filter("a"), filter("b")]);
+
+      act(() => {
+        result.current.removeBlockFilter(metricBlockId(1), 0);
+      });
+
+      expect(firstBlockOf(result).exploreFilters).toEqual([filter("b")]);
+    });
+
+    it("leaves the block unscoped once its last filter is removed", () => {
+      const { result } = renderScoped([filter("a")]);
+
+      act(() => {
+        result.current.removeBlockFilter(metricBlockId(1), 0);
+      });
+
+      expect(firstBlockOf(result).exploreFilters).toBeUndefined();
+      expect(result.current.blocks).toHaveLength(1);
     });
   });
 

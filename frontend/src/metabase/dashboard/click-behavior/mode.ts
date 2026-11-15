@@ -17,6 +17,15 @@ function getDashboardQueryMode(question: Question): QueryClickActionsMode {
   return mode === DefaultMode ? DashboardDefaultMode : mode;
 }
 
-export const dashboardClickActionMode: ClickActionsMode = new Mode(
-  getDashboardQueryMode,
-);
+/**
+ * The click actions for a chart on a dashboard. `mapActions` can add to or change
+ * the actions of a click, for example to offer one more.
+ */
+export function createDashboardClickActionMode(
+  options?: ConstructorParameters<typeof Mode>[1],
+): ClickActionsMode {
+  return new Mode(getDashboardQueryMode, options);
+}
+
+export const dashboardClickActionMode: ClickActionsMode =
+  createDashboardClickActionMode();

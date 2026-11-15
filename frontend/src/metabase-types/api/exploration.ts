@@ -60,6 +60,8 @@ export type ResearchPlanTimelineRef = { id: TimelineId; name: string };
 export type ResearchPlanGroup = {
   block_id: string;
   metric: ResearchPlanMetricRef;
+  // What the group is limited to, such as "Category: Gadget"; omitted when it is not.
+  filters?: string[];
   dimensions: ResearchPlanDimensionRef[];
 };
 
@@ -91,6 +93,8 @@ export type ExplorationQueryId = number;
 export interface ExplorationMetricSelection {
   card_id: CardId;
   dimension_mappings?: DimensionMapping[] | null;
+  /** Scopes the metric's charts to a segment, as a drill from a chart does. */
+  explore_filters?: ExplorationExploreFilter[];
 }
 
 export interface ExplorationDimensionSelection {
@@ -115,6 +119,8 @@ export interface CreateExplorationRequest {
 type BaseExplorationExploreFilter = {
   field_ref: DimensionReference;
   display_value: string;
+  // What the filter is on, such as "Category". The server labels it again when a Research is saved.
+  dimension_name?: string | null;
 };
 
 export type ExplorationExploreEqualityFilter = BaseExplorationExploreFilter & {
@@ -140,6 +146,57 @@ export interface ExploreFurtherRequest {
   // The clicked chart's page: its block (metric + dimensions) is copied into the new thread.
   page_id: ExplorationPageId;
   explore_filters: ExplorationExploreFilter[];
+}
+
+/** Why a chart cannot be researched. */
+export type ResearchFromChartIneligibleReason =
+  | "native"
+  | "multi-stage"
+  | "aggregation-count"
+  | "not-a-metric"
+  | "model";
+
+/** A metric offered to someone starting a Research from a chart. */
+export interface ResearchMetricMatch {
+  id: CardId;
+  name: string;
+  description?: string | null;
+  collection_id: CollectionId | null;
+  in_library?: boolean;
+}
+
+/**
+ * What `GET /api/exploration/from-card/:card-id` reports: whether a Research can
+ * start from the chart, and which metrics it would use or could use instead.
+ * `metric` is set when the chart is a metric, or a breakdown of one; `exact` is a
+ * metric that already says the same thing (used without asking); `similar` lists
+ * metrics with the same aggregation but different filters, joins or expressions.
+ */
+export type ResearchFromChartPreview =
+  | { eligible: false; reason: ResearchFromChartIneligibleReason }
+  | {
+      eligible: true;
+      metric?: ResearchMetricMatch;
+      exact?: ResearchMetricMatch | null;
+      similar?: ResearchMetricMatch[];
+    };
+
+export interface PrepareResearchFromChartRequest {
+  card_id: CardId;
+  /** One of the preview's similar metrics, to use instead of deriving one. */
+  metric_id?: CardId | null;
+}
+
+/**
+ * What a Research plan starts from when it is opened from a dashboard chart: the
+ * metric to research with its dimensions, the filters that scope it to the clicked
+ * point, and the question to ask. It travels in the navigation state to the plan
+ * page, which turns it into the first block of the draft.
+ */
+export interface ResearchPlanSeed extends GetExplorationDataResponse {
+  name: string;
+  explore_filters: ExplorationExploreFilter[];
+  question: string | null;
 }
 
 export interface UpdateExplorationRequest {

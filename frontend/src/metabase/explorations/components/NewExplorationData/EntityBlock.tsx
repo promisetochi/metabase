@@ -1,5 +1,6 @@
 import { t } from "ttag";
 
+import { ExploreFilterPills } from "metabase/explorations/components/ExploreFilterPills";
 import type { ExplorationBlock } from "metabase/explorations/hooks";
 import {
   ActionIcon,
@@ -98,6 +99,7 @@ interface MetricBlockItemProps {
   onToggleExpand: () => void;
   onRemoveBlock: () => void;
   onToggleDimension: (dimensionId: DimensionId) => void;
+  onRemoveFilter: (filterIndex: number) => void;
 }
 
 export function MetricBlockItem({
@@ -107,7 +109,9 @@ export function MetricBlockItem({
   onToggleExpand,
   onRemoveBlock,
   onToggleDimension,
+  onRemoveFilter,
 }: MetricBlockItemProps) {
+  const exploreFilters = block.exploreFilters ?? [];
   const selectedPills = block.dimensions
     .filter((d) => block.selectedDimensionIds.has(d.id))
     .map((d) => ({
@@ -125,27 +129,47 @@ export function MetricBlockItem({
       onToggleExpand={onToggleExpand}
       onRemoveBlock={onRemoveBlock}
     >
-      {expanded ? (
-        <Stack gap="lg">
+      <Stack gap="md">
+        {exploreFilters.length > 0 && (
+          <Stack gap="xs" data-testid="block-explore-filters">
+            <Text size="sm" c="text-secondary">
+              {t`Only looking at`}
+            </Text>
+            <ExploreFilterPills
+              filters={exploreFilters}
+              onRemove={disabled ? undefined : onRemoveFilter}
+            />
+          </Stack>
+        )}
+        {expanded ? (
+          <Stack gap="lg">
+            <Text size="sm" c="text-secondary">
+              {t`Modify which dimensions to see this metric by`}
+            </Text>
+            <Group align="center" gap="sm" wrap="wrap">
+              {block.dimensions.map((dimension) => (
+                <TogglePill
+                  key={dimension.id}
+                  label={formatDimensionLabel(dimension)}
+                  selected={block.selectedDimensionIds.has(dimension.id)}
+                  disabled={disabled}
+                  interestingness={dimension.dimension_interestingness}
+                  onToggle={() => onToggleDimension(dimension.id)}
+                />
+              ))}
+            </Group>
+          </Stack>
+        ) : selectedPills.length > 0 ? (
+          <SelectedPills pills={selectedPills} />
+        ) : (
           <Text size="sm" c="text-secondary">
-            {t`Modify which dimensions to see this metric by`}
+            {/* The block is locked only while Metabot is working on the plan. */}
+            {disabled
+              ? t`Metabot is choosing dimensions…`
+              : t`No dimensions picked yet`}
           </Text>
-          <Group align="center" gap="sm" wrap="wrap">
-            {block.dimensions.map((dimension) => (
-              <TogglePill
-                key={dimension.id}
-                label={formatDimensionLabel(dimension)}
-                selected={block.selectedDimensionIds.has(dimension.id)}
-                disabled={disabled}
-                interestingness={dimension.dimension_interestingness}
-                onToggle={() => onToggleDimension(dimension.id)}
-              />
-            ))}
-          </Group>
-        </Stack>
-      ) : (
-        <SelectedPills pills={selectedPills} />
-      )}
+        )}
+      </Stack>
     </EntityBlock>
   );
 }

@@ -443,6 +443,16 @@
         (is (str/includes? result "[metric:42] Revenue, broken out by: Region (d1), Plan (d2)"))
         (is (str/includes? result "[metric:43] Churn, broken out by: Plan (d7)"))
         (is (str/includes? result "Selected timelines: Releases (1)"))))
+    (testing "says what a group is limited to, and that no dimensions are picked yet"
+      (let [result (tools.explorations/format-research-plan
+                    {:research_plan {:name      "Orders"
+                                     :groups    [{:block_id   "metric:5"
+                                                  :metric     {:id 5 :name "Number of Orders"}
+                                                  :filters    ["Category: Gadget"]
+                                                  :dimensions []}]
+                                     :timelines []}})]
+        (is (str/includes? result "[metric:5] Number of Orders, limited to Category: Gadget"))
+        (is (str/includes? result "no dimensions picked yet"))))
     (testing "returns nil when there is no plan in context"
       (is (nil? (tools.explorations/format-research-plan {}))))
     (testing "returns nil for an empty plan so the template guard stays false"

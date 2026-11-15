@@ -8,10 +8,10 @@ import { getMetricSeriesWithDefaultDisplay } from "metabase/common/utils/card";
 import { PLUGIN_CONTENT_TRANSLATION } from "metabase/content-translation/plugins";
 import CS from "metabase/css/core/index.css";
 import { setParameterValuesFromQueryParams } from "metabase/dashboard/actions/parameters";
-import { dashboardClickActionMode } from "metabase/dashboard/click-behavior/mode";
 import { useDashboardContext } from "metabase/dashboard/context";
 import { useClickBehaviorData } from "metabase/dashboard/hooks";
 import { useResponsiveParameterList } from "metabase/dashboard/hooks/use-responsive-parameter-list";
+import { useDashboardClickActionMode } from "metabase/dashboard/research-from-chart/use-dashboard-click-action-mode";
 import {
   getDashCardInlineValuePopulatedParameters,
   getDashcardData,
@@ -636,6 +636,9 @@ export function DashCardVisualization({
   const { getExtraDataForClick } = useClickBehaviorData({
     dashcardId: dashcard.id,
   });
+  const defaultClickActionMode = useDashboardClickActionMode(series, {
+    skip: clickActionMode != null,
+  });
 
   // Visualizer cards render remapped columns,
   // so click objects must be mapped back to the columns of the underlying questions before computing actions.
@@ -687,7 +690,7 @@ export function DashCardVisualization({
               ? rawSeries
               : undefined
           }
-          mode={clickActionMode ?? dashboardClickActionMode}
+          mode={clickActionMode ?? defaultClickActionMode}
           getHref={getHref}
           getCardHref={getNextCardHref}
           gridSize={gridSize}

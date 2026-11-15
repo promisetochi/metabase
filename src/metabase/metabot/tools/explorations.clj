@@ -32,10 +32,16 @@
 (defn- format-research-plan-group
   "Format one group of the draft Research plan as a single line the LLM can act on. The
   `block_id` is surfaced verbatim so the agent can echo it back to plan-editing tools, and each
-  member dimension carries its id in parentheses."
-  [{:keys [block_id metric dimensions]}]
+  member dimension carries its id in parentheses. A group limited to a segment (the user clicked a
+  point on a chart) says so, since the plan tools cannot add or change that limit."
+  [{:keys [block_id metric dimensions filters]}]
   (str "- [" block_id "] " (:name metric)
-       ", broken out by: " (str/join ", " (map named-with-id dimensions))))
+       (when (seq filters)
+         (str ", limited to " (str/join ", " filters)
+              " (already applied; the user set it from a chart, so do not suggest filtering for it)"))
+       (if (seq dimensions)
+         (str ", broken out by: " (str/join ", " (map named-with-id dimensions)))
+         ", no dimensions picked yet")))
 
 (defn format-research-plan
   "Format the user's in-progress draft Research plan for injection into the system message.

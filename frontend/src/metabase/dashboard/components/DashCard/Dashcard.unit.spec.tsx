@@ -8,6 +8,7 @@ import { createMockMetadata } from "__support__/metadata";
 import {
   setupLastDownloadFormatEndpoints,
   setupTimelinesEndpoints,
+  setupUserMetabotPermissionsEndpoint,
 } from "__support__/server-mocks";
 import { mockSettings } from "__support__/settings";
 import { createMockDashboardState, createMockState } from "__support__/state";
@@ -237,6 +238,8 @@ describe("DashCard", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     setupLastDownloadFormatEndpoints();
+    // A chart offers "Research this" to people who may use Metabot.
+    setupUserMetabotPermissionsEndpoint();
   });
 
   afterEach(() => {

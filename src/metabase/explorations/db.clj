@@ -811,6 +811,17 @@
   [card-ids :- [:sequential ::lib.schema.id/card]]
   (t2/select (into [:model/Card] exploration-card-columns) :id [:in card-ids] :type "metric"))
 
+(mu/defn unarchived-metric-cards-on-table
+  "The exploration-relevant columns of the unarchived metric Cards built on `table-id` in `database-id`, whether or not the
+  current user can read them."
+  [database-id :- ::lib.schema.id/database
+   table-id    :- ::lib.schema.id/table]
+  (t2/select (into [:model/Card] exploration-card-columns)
+             :type "metric"
+             :archived false
+             :database_id database-id
+             :table_id table-id))
+
 (mu/defn cards-for-explorations
   "The exploration-relevant columns of the Cards with `card-ids`."
   [card-ids :- [:sequential ::lib.schema.id/card]]

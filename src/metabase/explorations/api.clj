@@ -13,6 +13,7 @@
    [metabase.explorations.core :as explorations]
    [metabase.explorations.db :as explorations.db]
    [metabase.explorations.derived-perms :as derived-perms]
+   [metabase.explorations.from-card :as from-card]
    [metabase.explorations.models.exploration :as expl.model]
    [metabase.explorations.models.exploration-block :as block]
    [metabase.explorations.models.exploration-query-result :as eqr]
@@ -352,7 +353,10 @@
   ;; the envelope `:dimension_mappings` key itself stays snake_case, matching storage.
   [:map {:closed true}
    [:card_id ms/PositiveInt]
-   [:dimension_mappings {:optional true} [:maybe [:sequential ::metrics/dimension-mapping]]]])
+   [:dimension_mappings {:optional true} [:maybe [:sequential ::metrics/dimension-mapping]]]
+   ;; Scopes this metric's charts to a segment, as a drill from a chart does. Labelled server-side by
+   ;; `enrich-block-filters` before it is persisted.
+   [:explore_filters {:optional true} [:maybe [:sequential ExploreFilterSpec]]]])
 
 (def ^:private DimensionSelection
   ;; The FE sends snake_case dimension snapshots; the `:decode/api` rule kebab-cases them at the
@@ -612,18 +616,25 @@
 
 ;;; ----------------------------------------- endpoints -----------------------------------------
 
-(api.macros/defendpoint :post "/" :- ::HydratedExploration
-  "Create a new exploration with a single thread, persist the user's selected metrics, dimensions,
-  and timelines, and stamp the thread as started. Also auto-creates a placeholder Summary
-  document in the same collection. Actual planning is async; this endpoint returns immediately
-  with an empty queries list. Clients should poll `GET /:id` until the queries appear and reach
-  a terminal status.
+(defn- enrich-block-filters
+  "Label the `:explore_filters` on `block`'s metric selections, and drop the key where there are none."
+  [block]
+  (update block :metrics
+          (fn [selections]
+            (mapv (fn [{:keys [card_id explore_filters] :as selection}]
+                    (if (seq explore_filters)
+                      (let [card (explorations.db/card card_id)
+                            mp   (lib-be/application-database-metadata-provider (:database_id card))]
+                        (assoc selection :explore_filters
+                               (qp.context/enrich-explore-filters mp card block selection explore_filters)))
+                      (dissoc selection :explore_filters)))
+                  selections))))
 
-  Accepts the per-area `:blocks` payload (one entry per Research-plan block), persisted
-  verbatim, plus a thread-scoped `:timeline_ids`."
-  [_route-params
-   _query-params
-   {:keys [name description prompt collection_id blocks timeline_ids]} :- CreateExploration]
+(defn- create-exploration!
+  "Create an exploration with one started thread from `params` (the shape of `POST /api/exploration`), and return it
+  hydrated. Checks that the current user may create it in the collection and read every metric and timeline it
+  references."
+  [{:keys [name description prompt collection_id blocks timeline_ids]}]
   (api/create-check :model/Exploration {:collection_id collection_id})
   ;; Block metric-card and timeline references are persisted verbatim and read back unfiltered
   ;; (planning context, thread hydration), so attach time is the
@@ -632,7 +643,8 @@
     (api/read-check :model/Card card-id))
   (doseq [timeline-id (distinct timeline_ids)]
     (api/read-check :model/Timeline timeline-id))
-  (let [persisted
+  (let [blocks    (mapv enrich-block-filters blocks)
+        persisted
         (t2/with-transaction [_]
           (let [exploration (explorations.db/insert-exploration! {:name          name
                                                                   :description   description
@@ -658,6 +670,72 @@
     (events/publish-event! :event/exploration-create
                            {:object persisted :user-id api/*current-user-id*})
     (hydrate-exploration persisted)))
+
+(api.macros/defendpoint :post "/" :- ::HydratedExploration
+  "Create a new exploration with a single thread, persist the user's selected metrics, dimensions,
+  and timelines, and stamp the thread as started. Also auto-creates a placeholder Summary
+  document in the same collection. Actual planning is async; this endpoint returns immediately
+  with an empty queries list. Clients should poll `GET /:id` until the queries appear and reach
+  a terminal status.
+
+  Accepts the per-area `:blocks` payload (one entry per Research-plan block), persisted
+  verbatim, plus a thread-scoped `:timeline_ids`."
+  [_route-params
+   _query-params
+   body :- CreateExploration]
+  (create-exploration! body))
+
+;;; ----------------------------------------- start from a chart -----------------------------------------
+
+(mr/def ::MetricMatch
+  "A metric offered to someone starting a Research from a chart."
+  [:map {:closed true}
+   [:id            ms/PositiveInt]
+   [:name          :string]
+   [:description   {:optional true} [:maybe :string]]
+   [:collection_id [:maybe ms/PositiveInt]]
+   [:in_library    {:optional true} :boolean]])
+
+(mr/def ::FromCardPreview
+  "What `GET /from-card/:card-id` reports. When the chart cannot be researched, `:reason` says why. When the chart is
+  itself a metric, `:metric` is it. Otherwise `:exact` is a metric that already says the same thing (and will be used),
+  and `:similar` lists metrics with the same aggregation but different filters, joins or expressions."
+  [:map {:closed true}
+   [:eligible :boolean]
+   [:reason   {:optional true} [:enum :native :multi-stage :aggregation-count :not-a-metric :model]]
+   [:metric   {:optional true} ::MetricMatch]
+   [:exact    {:optional true} [:maybe ::MetricMatch]]
+   [:similar  {:optional true} [:sequential ::MetricMatch]]])
+
+(def ^:private FromCard
+  "Body schema for `POST /api/exploration/from-card`. `:metric_id` picks one of the similar metrics offered by the preview
+  instead of deriving one."
+  [:map {:closed true}
+   [:card_id   ms/PositiveInt]
+   [:metric_id {:optional true} [:maybe ms/PositiveInt]]])
+
+(api.macros/defendpoint :get "/from-card/:card-id" :- ::FromCardPreview
+  "Whether a Research can be started from the chart saved as card `card-id`, and which existing metrics it would use or
+  could use instead. Creates nothing."
+  [{:keys [card-id]} :- [:map {:closed true} [:card-id ms/PositiveInt]]]
+  (from-card/preview (api/read-check :model/Card card-id)))
+
+(api.macros/defendpoint :post "/from-card" :- ::DimensionsResponse
+  "Get the metric to research for the chart saved as card `card_id`, without the person having to know what a metric is,
+  and return it the way `GET /dimensions` does, so the client can put it in a Research plan to be adjusted and started.
+
+  The metric is the card itself when it is a metric, the one chosen with `metric_id`, an existing metric that already
+  says the same thing, or a new one derived from the chart (its breakdowns, sorting and limit removed) and saved to the
+  person's personal collection. Nothing else is created: no Research is started."
+  [_route-params
+   _query-params
+   {:keys [card_id metric_id]} :- FromCard]
+  (let [card   (api/read-check :model/Card card_id)
+        metric (from-card/ensure-metric! card metric_id)
+        data   (explorations/exploration-data {:metric-ids [(:id metric)]})]
+    (when (empty? (:dimension_ids (first (:metrics data))))
+      (throw (ex-info (tru "This metric has no dimensions to research.") {:status-code 400})))
+    data))
 
 (defn- drill-thread-stamp
   "The lens stamp for the thread `explore-further` creates. Its `:resolved_source_ids` is the union of the block's

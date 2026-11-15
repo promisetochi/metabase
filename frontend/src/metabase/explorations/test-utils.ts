@@ -78,6 +78,7 @@ export function makeMockSelection(
     removeTimelinesById: jest.fn(),
     removeBlock: jest.fn(),
     removeBlockDimensions: jest.fn(),
+    removeBlockFilter: jest.fn(),
     toggleDimensionSelected: jest.fn(),
   };
 }

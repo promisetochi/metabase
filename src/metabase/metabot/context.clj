@@ -243,6 +243,8 @@
   [:map {:closed true}
    [:block_id :string]
    [:metric ::research-plan-ref]
+   ;; What the group is limited to, as the user sees it (for example "Category: Gadget").
+   [:filters {:optional true} [:sequential :string]]
    [:dimensions [:sequential ::research-plan-ref]]])
 
 (mr/def ::research-plan

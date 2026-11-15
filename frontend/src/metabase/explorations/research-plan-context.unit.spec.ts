@@ -1,4 +1,5 @@
 import type {
+  ExplorationExploreFilter,
   ExplorationMetric,
   MetricDimension,
   Timeline,
@@ -52,6 +53,38 @@ describe("selectionToResearchPlanContext", () => {
         dimensions: [{ id: "d1", name: "Region" }],
       },
     ]);
+  });
+
+  it("says what a group is limited to, and nothing for a group that is not", () => {
+    const region = dimension("d1", { display_name: "Region" });
+    const exploreFilters: ExplorationExploreFilter[] = [
+      {
+        operator: "=",
+        field_ref: ["field", 1, null],
+        value: "Gadget",
+        display_value: "Gadget",
+        dimension_name: "Category",
+      },
+    ];
+    const limited = {
+      ...mockExplorationBlock(metric(42, "Revenue"), [region], new Set()),
+      exploreFilters,
+    };
+    const plain = mockExplorationBlock(metric(43, "Churn"), [region]);
+
+    const result = selectionToResearchPlanContext({
+      blocks: [limited, plain],
+      timelines: [],
+      name: "",
+    });
+
+    expect(result.groups[0]).toEqual({
+      block_id: "metric:42",
+      metric: { id: 42, name: "Revenue" },
+      filters: ["Category: Gadget"],
+      dimensions: [],
+    });
+    expect(result.groups[1]).not.toHaveProperty("filters");
   });
 
   it("includes selected timelines", () => {

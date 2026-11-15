@@ -1,14 +1,23 @@
 import type { ExplorationBlock } from "metabase/explorations/hooks";
 import type {
+  ExplorationExploreFilter,
   ResearchPlanContext,
   ResearchPlanGroup,
   Timeline,
 } from "metabase-types/api";
 
+function filterLabel(filter: ExplorationExploreFilter): string {
+  return filter.dimension_name
+    ? `${filter.dimension_name}: ${filter.display_value}`
+    : filter.display_value;
+}
+
 function blockToGroup(block: ExplorationBlock): ResearchPlanGroup {
+  const filters = (block.exploreFilters ?? []).map(filterLabel);
   return {
     block_id: block.id,
     metric: { id: block.metric.id, name: block.metric.name },
+    ...(filters.length > 0 ? { filters } : {}),
     dimensions: block.dimensions
       .filter((d) => block.selectedDimensionIds.has(d.id))
       .map((d) => ({ id: d.id, name: d.display_name })),

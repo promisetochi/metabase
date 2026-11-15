@@ -1,14 +1,20 @@
+import fetchMock from "fetch-mock";
 import { useState } from "react";
 
-import { act, renderWithProviders, screen } from "__support__/ui";
+import { act, renderWithProviders, screen, waitFor } from "__support__/ui";
 import type { ExplorationSelection } from "metabase/explorations/hooks";
-import { makeMockSelection } from "metabase/explorations/test-utils";
+import {
+  makeMockSelection,
+  mockExplorationBlock,
+} from "metabase/explorations/test-utils";
 import {
   getMessages,
   getMetabotConversationId,
   metabotActions,
 } from "metabase/metabot/state";
-import { Route } from "metabase/router";
+import { Navigate, Route } from "metabase/router";
+import type { ExplorationExploreFilter } from "metabase-types/api";
+import { createMockMetric } from "metabase-types/api/mocks";
 
 import { NewExplorationDraftProvider } from "./NewExplorationDraftProvider";
 import { NewExplorationPage } from "./NewExplorationPage";
@@ -42,11 +48,43 @@ jest.mock("../components/NewExplorationPlan", () => ({
   },
 }));
 
-function setup() {
+const exploreFilters: ExplorationExploreFilter[] = [
+  {
+    operator: "=",
+    field_ref: ["field", 1, null],
+    value: "Gadget",
+    display_value: "Gadget",
+  },
+];
+
+const seed = {
+  name: "Research: Orders by category",
+  // the mock only builds the base metric; a seed carries the Research one
+  metrics: [
+    { ...createMockMetric({ id: 5, name: "Orders" }), dimension_ids: [] },
+  ],
+  dimension_groups: [],
+  explore_filters: exploreFilters,
+  question: "What drives Number of Orders for Category Gadget?",
+};
+
+function setup({
+  withBlock = false,
+  question = seed.question,
+}: {
+  // The mocked selection never grows, so a test that needs the seed's block to
+  // be in the plan starts the draft with it.
+  withBlock?: boolean;
+  question?: string | null;
+} = {}) {
   const { useExplorationSelection } = jest.requireMock("../hooks");
   // like the real hook: one identity per mounted instance, new one on remount
   jest.mocked(useExplorationSelection).mockImplementation(() => {
-    const [selection] = useState(makeMockSelection);
+    const [selection] = useState(() =>
+      makeMockSelection({
+        blocks: withBlock ? [mockExplorationBlock(seed.metrics[0])] : [],
+      }),
+    );
     return selection;
   });
 
@@ -58,6 +96,16 @@ function setup() {
         <Route index element={<NewExplorationPage />} />
         <Route path="plan" element={<NewExplorationPlanPage />} />
       </Route>
+      <Route
+        path="from-chart"
+        element={
+          <Navigate
+            to="/question/research/plan"
+            state={{ researchPlanSeed: { ...seed, question } }}
+            replace
+          />
+        }
+      />
       <Route path=":id" element={<div data-testid="detail-page" />} />
     </Route>,
     {
@@ -124,6 +172,86 @@ describe("NewExplorationDraftProvider", () => {
     expect(mockRendered.entry).toBe(shared);
     expect(mockRendered.plan).toBe(shared);
     expect(getDraftMessages()).toHaveLength(1);
+  });
+
+  it("starts the plan with the metric, scope and name a chart opened it with, and no dimensions picked", () => {
+    const { router, getDraftMessages } = setup();
+
+    // what a dashboard chart's "Research this" does: a link to the plan page
+    // that carries the seed in the navigation state
+    act(() => {
+      router?.navigate("/question/research/from-chart");
+    });
+
+    const draft = mockRendered.plan;
+    expect(draft?.addMetric).toHaveBeenCalledTimes(1);
+    expect(draft?.addMetric).toHaveBeenCalledWith(
+      seed.metrics[0],
+      expect.objectContaining({
+        exploreFilters,
+        withoutDefaultDimensions: true,
+      }),
+    );
+    expect(draft?.setName).toHaveBeenCalledWith(seed.name);
+    // the question waits for the block, so Metabot sees the plan it is asked about
+    expect(getDraftMessages()).toHaveLength(0);
+  });
+
+  it("sends the question to Metabot once the block is in the plan", async () => {
+    fetchMock.post("path:/api/metabot/agent-streaming", 200);
+    const { router, getDraftMessages } = setup({ withBlock: true });
+
+    act(() => {
+      router?.navigate("/question/research/from-chart");
+    });
+
+    const sentByUser = () =>
+      getDraftMessages().filter((message) => message.role === "user");
+    await waitFor(() => expect(sentByUser()).toHaveLength(1));
+    expect(JSON.stringify(sentByUser()[0])).toContain(seed.question);
+    // the request carries it too, as the first message of the conversation
+    await waitFor(() =>
+      expect(
+        fetchMock.callHistory.calls("path:/api/metabot/agent-streaming"),
+      ).toHaveLength(1),
+    );
+  });
+
+  it("sends nothing when the chart opened the plan without a question", () => {
+    const { router, getDraftMessages } = setup({
+      withBlock: true,
+      question: null,
+    });
+
+    act(() => {
+      router?.navigate("/question/research/from-chart");
+    });
+
+    expect(getDraftMessages()).toHaveLength(0);
+  });
+
+  it("keeps the default dimensions when there is no question for Metabot to choose from", () => {
+    const { router } = setup({ question: null });
+
+    act(() => {
+      router?.navigate("/question/research/from-chart");
+    });
+
+    expect(mockRendered.plan?.addMetric).toHaveBeenCalledWith(
+      seed.metrics[0],
+      expect.objectContaining({ withoutDefaultDimensions: false }),
+    );
+  });
+
+  it("opens the plan empty when it was not opened from a chart", () => {
+    const { router } = setup();
+
+    act(() => {
+      router?.navigate("/question/research/plan");
+    });
+
+    expect(mockRendered.plan?.addMetric).not.toHaveBeenCalled();
+    expect(mockRendered.plan?.setName).not.toHaveBeenCalled();
   });
 
   it("does not mount the draft on the exploration detail routes", () => {

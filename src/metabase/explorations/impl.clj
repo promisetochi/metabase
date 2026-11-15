@@ -26,7 +26,7 @@
    a nil score (didn't score) are kept."
   0.1)
 
-(defn- library-metrics-collection-ids
+(defn library-metrics-collection-ids
   "Set of collection ids (the library-metrics root + descendants) whose metric Cards should be sorted
    to the top of the /dimensions response."
   []

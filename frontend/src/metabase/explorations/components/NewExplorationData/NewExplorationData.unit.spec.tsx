@@ -1,17 +1,24 @@
 import userEvent from "@testing-library/user-event";
 
 import { setupExplorationDataEndpoint } from "__support__/server-mocks/metric";
-import { renderWithProviders, screen, waitFor } from "__support__/ui";
+import { renderWithProviders, screen, waitFor, within } from "__support__/ui";
 import { useCreateExplorationMutation } from "metabase/api";
 import { trackExplorationPlanEdited } from "metabase/explorations/analytics";
-import type { ExplorationBlock } from "metabase/explorations/hooks";
+import {
+  type ExplorationBlock,
+  metricBlockId,
+} from "metabase/explorations/hooks";
 import {
   createExploration,
   makeMockSelection,
   mockExplorationBlock,
 } from "metabase/explorations/test-utils";
 import { useMetabotAgent } from "metabase/metabot/hooks";
-import type { ExplorationMetric, Timeline } from "metabase-types/api";
+import type {
+  ExplorationExploreFilter,
+  ExplorationMetric,
+  Timeline,
+} from "metabase-types/api";
 import { createMockTimeline } from "metabase-types/api/mocks";
 import {
   createMockMetric,
@@ -68,13 +75,21 @@ function setup({
   blocks = [],
   timelines = [],
   messages = [],
+  unsentPrompt = "",
+  isDoingScience = false,
 }: {
   blocks?: ExplorationBlock[];
   timelines?: Timeline[];
   messages?: { role: "user" | "agent"; message: string }[];
+  // What is typed in the chat box and not sent yet.
+  unsentPrompt?: string;
+  // Metabot is working on the plan.
+  isDoingScience?: boolean;
 } = {}) {
   // Unjustified type cast. FIXME
   jest.mocked(useMetabotAgent).mockReturnValue({
+    prompt: unsentPrompt,
+    isDoingScience,
     messages: messages.map((message, index) => ({
       id: `message-${index}`,
       role: message.role,
@@ -212,6 +227,71 @@ describe("NewExplorationData (Research plan)", () => {
       );
     });
 
+    it("says so when a block has no dimensions picked yet", () => {
+      setup({
+        blocks: [
+          mockExplorationBlock(
+            revenueMetric,
+            [dimCreatedAt, dimPlan],
+            new Set(),
+          ),
+        ],
+      });
+
+      expect(screen.getByText("No dimensions picked yet")).toBeInTheDocument();
+    });
+
+    it("says Metabot is choosing the dimensions while it works on the plan", () => {
+      setup({
+        isDoingScience: true,
+        blocks: [
+          mockExplorationBlock(
+            revenueMetric,
+            [dimCreatedAt, dimPlan],
+            new Set(),
+          ),
+        ],
+      });
+
+      expect(
+        screen.getByText("Metabot is choosing dimensions…"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("No dimensions picked yet"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows what a block is scoped to, and lets a filter be removed", async () => {
+      const exploreFilters: ExplorationExploreFilter[] = [
+        {
+          operator: "=",
+          field_ref: ["field", 2, null],
+          value: "Pro",
+          display_value: "Pro",
+        },
+      ];
+      const { selection } = setup({
+        blocks: [
+          {
+            ...mockExplorationBlock(revenueMetric, [dimCreatedAt, dimPlan]),
+            exploreFilters,
+          },
+        ],
+      });
+
+      const scope = screen.getByTestId("block-explore-filters");
+      expect(within(scope).getByText("Pro")).toBeInTheDocument();
+
+      await userEvent.click(
+        within(scope).getByRole("button", { name: "Remove" }),
+      );
+
+      expect(selection.removeBlockFilter).toHaveBeenCalledWith(
+        metricBlockId(revenueMetric.id),
+        0,
+      );
+    });
+
     it("clicking the area's remove button calls selection.removeBlock", async () => {
       const { selection } = setup({
         blocks: [mockExplorationBlock(revenueMetric, [dimCreatedAt])],
@@ -289,6 +369,37 @@ describe("NewExplorationData (Research plan)", () => {
       expect(request.blocks[0].dimensions.map((d) => d.dimension_id)).toEqual([
         dimCreatedAt.id,
       ]);
+    });
+
+    it("sends a block's explore filters with its metric, and none when it has none", () => {
+      const exploreFilters: ExplorationExploreFilter[] = [
+        {
+          operator: "=",
+          field_ref: ["field", 2, null],
+          value: "Pro",
+          display_value: "Pro",
+        },
+      ];
+      const scoped = {
+        ...mockExplorationBlock(revenueMetric, [dimCreatedAt]),
+        exploreFilters,
+      };
+      const plain = mockExplorationBlock(churnMetric, [dimPlan]);
+
+      const request = buildCreateExplorationRequest(
+        "n",
+        "",
+        [scoped, plain],
+        [],
+        null,
+      );
+
+      expect(request.blocks[0].metrics[0].explore_filters).toEqual(
+        exploreFilters,
+      );
+      expect(request.blocks[1].metrics[0]).not.toHaveProperty(
+        "explore_filters",
+      );
     });
 
     it("sends thread-scoped timeline_ids at the top level (not per block)", () => {
@@ -378,6 +489,44 @@ describe("NewExplorationData (Research plan)", () => {
       setup({
         blocks: [metricBlock],
         messages: [{ role: "user", message: userQuestion }],
+      });
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Start research" }),
+      );
+
+      await waitFor(() => {
+        expect(createExplorationMock).toHaveBeenCalledWith(
+          expect.objectContaining({ prompt: userQuestion }),
+        );
+      });
+    });
+
+    it("uses a question that is in the chat box but not sent yet", async () => {
+      setup({ blocks: [metricBlock], unsentPrompt: userQuestion });
+
+      expect(
+        screen.getByRole("switch", {
+          name: /Use AI to analyze and order results/,
+        }),
+      ).toBeChecked();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Start research" }),
+      );
+
+      await waitFor(() => {
+        expect(createExplorationMock).toHaveBeenCalledWith(
+          expect.objectContaining({ prompt: userQuestion }),
+        );
+      });
+    });
+
+    it("prefers what was sent over what is still being typed", async () => {
+      setup({
+        blocks: [metricBlock],
+        messages: [{ role: "user", message: userQuestion }],
+        unsentPrompt: "Something else",
       });
 
       await userEvent.click(

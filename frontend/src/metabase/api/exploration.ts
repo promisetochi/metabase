@@ -2,6 +2,7 @@ import type {
   AppendChartToSummaryRequest,
   CancelExplorationThreadRequest,
   CancelExplorationThreadResponse,
+  CardId,
   CreateExplorationRequest,
   Dataset,
   Exploration,
@@ -13,6 +14,8 @@ import type {
   GetExplorationDataResponse,
   GetMyExplorationsRequest,
   GetMyExplorationsResponse,
+  PrepareResearchFromChartRequest,
+  ResearchFromChartPreview,
   RestartExplorationThreadRequest,
   UpdateExplorationRequest,
 } from "metabase-types/api";
@@ -83,6 +86,28 @@ export const explorationApi = Api.injectEndpoints({
       }),
       invalidatesTags: (_, error, { id }) =>
         invalidateTags(error, [idTag("exploration", id)]),
+    }),
+    getResearchFromChartPreview: builder.query<
+      ResearchFromChartPreview,
+      CardId
+    >({
+      query: (cardId) => ({
+        method: "GET",
+        url: `/api/exploration/from-card/${cardId}`,
+      }),
+      providesTags: (_, __, cardId) => [idTag("card", cardId)],
+    }),
+    prepareResearchFromChart: builder.mutation<
+      GetExplorationDataResponse,
+      PrepareResearchFromChartRequest
+    >({
+      query: (body) => ({
+        method: "POST",
+        url: "/api/exploration/from-card",
+        body,
+      }),
+      // Preparing can save a new metric.
+      invalidatesTags: (_, error) => invalidateTags(error, [listTag("card")]),
     }),
     deleteExploration: builder.mutation<void, ExplorationId>({
       query: (id) => ({
@@ -221,6 +246,8 @@ export const {
   useGetMyExplorationsQuery,
   useCreateExplorationMutation,
   useExploreFurtherMutation,
+  useGetResearchFromChartPreviewQuery,
+  usePrepareResearchFromChartMutation,
   useUpdateExplorationMutation,
   useDeleteExplorationMutation,
   useRestartExplorationThreadMutation,

@@ -9,8 +9,11 @@ export type ExploreFilterPill = Pick<
 
 export function ExploreFilterPills({
   filters,
+  onRemove,
 }: {
   filters: ExploreFilterPill[];
+  // When given, each pill can be removed; otherwise they only show the scope.
+  onRemove?: (index: number) => void;
 }) {
   if (filters.length === 0) {
     return null;
@@ -18,7 +21,11 @@ export function ExploreFilterPills({
   return (
     <Group gap="sm" wrap="wrap">
       {filters.map((filter, index) => (
-        <FilterPill key={index} readOnly>
+        <FilterPill
+          key={index}
+          readOnly={onRemove == null}
+          onRemoveClick={onRemove ? () => onRemove(index) : undefined}
+        >
           {exploreFilterPillLabel(filter)}
         </FilterPill>
       ))}
