@@ -19,6 +19,7 @@ import {
   PreviewSection,
   type PreviewType,
 } from "metabase/metadata/components";
+import { useDataLayers } from "metabase/metadata/data-layers";
 import { getTableMetadataQuery } from "metabase/metadata/pages/shared/utils";
 import {
   PLUGIN_FEATURE_LEVEL_PERMISSIONS,
@@ -42,10 +43,12 @@ import {
   TableDetailsSkeleton,
 } from "./DetailPanel";
 import { FieldDetailsPanel } from "./FieldDetailsPanel";
+import { PropertyDetailsPanel } from "./PropertyDetailsPanel";
 import { SchemaDetailsPanel } from "./SchemaDetailsPanel";
 import { RouterTablePicker } from "./TablePicker";
 import type { ChangeOptions, TreePath } from "./TablePicker/types";
 import { TableSection } from "./TableSection";
+import { TableActionsMenu } from "./TableSection/TableActionsMenu";
 import { TableAttributesEditBulk } from "./TableSection/TableAttributesEditBulk";
 import {
   DRAWER_PANEL_WIDTH,
@@ -53,6 +56,10 @@ import {
   REVEAL_WIDTH_DURATION_MS,
   REVEAL_WIDTH_TRANSITION,
 } from "./constants";
+import {
+  PropertySelectionProvider,
+  usePropertySelection,
+} from "./contexts/PropertySelectionContext";
 import { SelectionProvider, useSelection } from "./contexts/SelectionContext";
 import type { DrawerPanel, RouteParams } from "./types";
 import { isPageEscape, parseRouteParams } from "./utils";
@@ -60,7 +67,9 @@ import { isPageEscape, parseRouteParams } from "./utils";
 export const DataModel = () => {
   return (
     <SelectionProvider>
-      <DataModelContent />
+      <PropertySelectionProvider>
+        <DataModelContent />
+      </PropertySelectionProvider>
     </SelectionProvider>
   );
 };
@@ -108,6 +117,8 @@ function DataModelContent() {
   } = useGetTableQueryMetadataQuery(getTableMetadataQuery(metadataTableId));
   const isLoadingTable = isFetchingTable && table == null;
   const field = table?.fields?.find((field) => field.id === fieldId);
+  const { selectedPropertyName, setSelectedPropertyName } =
+    usePropertySelection(table?.id);
 
   const hasLibraryFeature = useHasTokenFeature("library");
   const { data: libraryCollection, isLoading: isLoadingLibrary } =
@@ -129,6 +140,14 @@ function DataModelContent() {
   // The tree path the person last clicked. The tree also selects a lone
   // database or schema on its own, and that must not open a drawer.
   const [pickedPath, setPickedPath] = useState<TreePath | null>(null);
+  const {
+    getDataLayers,
+    setDataLayers,
+    getSchemaDataLayer,
+    setSchemaDataLayerId,
+    getSchemaDisplayName,
+    setSchemaDisplayName,
+  } = useDataLayers();
 
   const handlePathChange = useCallback(
     (path: TreePath, options?: ChangeOptions) => {
@@ -198,6 +217,12 @@ function DataModelContent() {
     tableId: metadataTableId,
   });
 
+  const showPropertyDetails =
+    showTableDetailsSection &&
+    activeTab === "properties" &&
+    table != null &&
+    selectedPropertyName != null;
+
   const isDrawerOpen =
     openContainer != null ||
     showBulkTableEdit ||
@@ -235,7 +260,9 @@ function DataModelContent() {
 
   // Esc closes the innermost open panel: preview, then field, then the drawer
   closeActivePanelRef.current = () => {
-    if (showFieldPreview) {
+    if (showPropertyDetails) {
+      setSelectedPropertyName(null);
+    } else if (showFieldPreview) {
       closePreview();
     } else if (showFieldDetails) {
       closeFieldDetails();
@@ -254,6 +281,10 @@ function DataModelContent() {
           databaseId={container.databaseId}
           defaultWidth={panelWidths.database}
           onWidthChange={handlePanelWidthChange("database")}
+          dataLayers={getDataLayers(container.databaseId)}
+          onDataLayersChange={(layers) =>
+            setDataLayers(container.databaseId, layers)
+          }
           onClose={closeContainerDetails}
         />
       );
@@ -265,8 +296,21 @@ function DataModelContent() {
         ref={scrollToPanel}
         databaseId={databaseId}
         schemaName={schemaName}
+        displayName={getSchemaDisplayName(databaseId, schemaName)}
+        onDisplayNameChange={(displayName) =>
+          setSchemaDisplayName(databaseId, schemaName, displayName)
+        }
         defaultWidth={panelWidths.schema}
         onWidthChange={handlePanelWidthChange("schema")}
+        dataLayers={getDataLayers(databaseId)}
+        dataLayer={getSchemaDataLayer(databaseId, schemaName)}
+        onDataLayerChange={(layerId) =>
+          setSchemaDataLayerId(databaseId, schemaName, layerId)
+        }
+        onManageDataLayers={() => {
+          setPickedPath({ databaseId });
+          navigate(Urls.dataStudioData({ databaseId }));
+        }}
         onClose={closeContainerDetails}
       />
     );
@@ -312,6 +356,7 @@ function DataModelContent() {
             canPublish={canPublish}
             hasLibrary={hasLibrary}
             onUpdate={() => onUpdateCallback?.()}
+            onClose={closeDrawer}
           />
         </DetailPanel>
       )}
@@ -327,6 +372,16 @@ function DataModelContent() {
             label={t`Table`}
             title={table?.display_name}
             isLoading={isLoading}
+            actions={
+              table && (
+                <TableActionsMenu
+                  table={table}
+                  canPublish={canPublish}
+                  hasLibrary={hasLibrary}
+                  onUpdate={handleTableUpdate}
+                />
+              )
+            }
             onClose={closeDrawer}
             data-testid="table-section-header"
           />
@@ -345,13 +400,23 @@ function DataModelContent() {
                 table={table}
                 activeFieldId={fieldId}
                 activeTab={activeTab}
-                canPublish={canPublish}
-                hasLibrary={hasLibrary}
                 onUpdate={handleTableUpdate}
               />
             )
           )}
         </DetailPanel>
+      )}
+
+      {showPropertyDetails && (
+        <PropertyDetailsPanel
+          key={`${table.id}:${selectedPropertyName}`}
+          ref={scrollToPanel}
+          table={table}
+          propertyName={selectedPropertyName}
+          defaultWidth={panelWidths.field}
+          onWidthChange={handlePanelWidthChange("field")}
+          onClose={() => setSelectedPropertyName(null)}
+        />
       )}
 
       <Transition

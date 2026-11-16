@@ -5,8 +5,9 @@ import {
   getStatusFields,
 } from "metabase/metadata/lifecycle";
 import { isDate, isFK, isInteger, isPK } from "metabase-lib/v1/types/utils/isa";
-import type { Field, FieldId } from "metabase-types/api";
+import type { Field, FieldId, Table, TableId } from "metabase-types/api";
 
+import { inferDurableKeyFieldId, inferVersionFieldId } from "./history-source";
 import { type TableRole, getTableRoleLabel } from "./roles";
 
 export type RowIdentity =
@@ -43,11 +44,46 @@ export type RoleInference = {
   confidence: "high" | "low";
 };
 
+/** How to read a history table: which rows are versions of the same thing */
+export type HistoryBinding = {
+  durableKeyFieldId: FieldId | null;
+  validFromFieldId: FieldId | null;
+  validToFieldId: FieldId | null;
+  currentFlagFieldId: FieldId | null;
+  versionFieldId: FieldId | null;
+  /** Filter to the current version of each row by default */
+  currentRowsOnly: boolean;
+};
+
+/** How to read an entity–attribute–value table */
+export type EavBinding = {
+  entityKeyFieldId: FieldId | null;
+  propertyFieldId: FieldId | null;
+  valueFieldId: FieldId | null;
+  definitionTableId: TableId | null;
+  labelFieldId: FieldId | null;
+  typeFieldId: FieldId | null;
+};
+
+export type EavDefinitionInference = {
+  definitionTableId: TableId | null;
+  labelFieldId: FieldId | null;
+  typeFieldId: FieldId | null;
+  signal: string;
+};
+
 export type DefinitionColumns = {
   keyFieldId: FieldId | null;
   labelFieldId: FieldId | null;
   typeFieldId: FieldId | null;
 };
+
+export type CustomPropertyFacet = {
+  prefix: string;
+  suffix: string;
+};
+
+export type SchemaTable = Pick<Table, "id" | "name"> & { fields?: Field[] };
 
 type TableShape = { name: string; fields: Field[] };
 
@@ -57,6 +93,12 @@ const VALID_FROM_RE =
   /(^|_)(valid_from|effective_from|effective_date|dbt_valid_from)$|^_fivetran_start$/;
 const VALID_TO_RE =
   /(^|_)(valid_to|effective_to|end_date|dbt_valid_to)$|^_fivetran_end$/;
+const START_DATE_RE =
+  /(^|_)(start_date|start_at|started_at|starts_at|start_time|valid_start|from_date|date_from|changed_at|entered_at)$/;
+const END_DATE_RE =
+  /(^|_)(end_at|ended_at|ends_at|end_time|valid_end|to_date|date_to|exited_at|left_at)$/;
+const CURRENT_FLAG_RE =
+  /^(is_current|current_flag|is_latest|active|is_active)$|^_fivetran_active$/;
 const CREATED_RE = /^(created_at|created|created_on|inserted_at)$/;
 const UPDATED_RE =
   /^(updated_at|updated|updated_on|modified_at|last_modified)$/;
@@ -69,6 +111,8 @@ const VALUE_RE = /(^|_)value$/;
 const DEFINITION_LABEL_RES = [/^title$/, /^label$/, /^display_name$/, /^name$/];
 const DEFINITION_TYPE_RE = /^(type|data_type|field_type|value_type)$/;
 const DEFINITION_KEY_RES = [/^name$/, /^key$/, /^(api|internal)_name$/];
+const WILDCARD_RE = /^(custom|property)_(.+)$/;
+const DEFINITION_SIBLING_SUFFIX_RE = /_(values?|history)$/;
 
 // Name rules, in priority order; downstream prefixes are strong signals
 const NAME_RULES: {
@@ -354,6 +398,63 @@ export function inferPeriodGranularity({
 
 const idOf = (field: Field | undefined) => (field ? field.id : null);
 
+export function inferHistoryBinding(fields: Field[]): HistoryBinding {
+  const pks = fields.filter(isPK);
+  const compositeKeyMember =
+    pks.length > 1
+      ? pks.find((field) => !isDate(field) && !matches(field, VERSION_RE))
+      : undefined;
+  const durableKeyFieldId =
+    idOf(compositeKeyMember) ?? inferDurableKeyFieldId(fields);
+  const validFrom = fields.find((field) => matches(field, VALID_FROM_RE));
+  const validTo = findByPriority(fields, [VALID_TO_RE, END_DATE_RE]);
+  const keyShapeVersion =
+    pks.length > 1
+      ? pks.find((field) => isDate(field) || matches(field, VERSION_RE))
+      : undefined;
+  const startDate =
+    validFrom ??
+    fields.find((field) => matches(field, START_DATE_RE)) ??
+    (validTo ? undefined : keyShapeVersion) ??
+    findTimeColumn(fields, validTo);
+  return {
+    durableKeyFieldId,
+    validFromFieldId: idOf(startDate),
+    validToFieldId: idOf(validTo),
+    currentFlagFieldId: idOf(
+      fields.find((field) => matches(field, CURRENT_FLAG_RE)),
+    ),
+    versionFieldId:
+      inferVersionFieldId(fields) ?? (validFrom ? null : idOf(keyShapeVersion)),
+    currentRowsOnly: true,
+  };
+}
+
+function findTimeColumn(fields: Field[], endDate: Field | undefined) {
+  const dates = fields.filter((field) => isDate(field) && field !== endDate);
+  return (
+    dates.find((field) => !matches(field, BOOKKEEPING_DATE_RE)) ?? dates[0]
+  );
+}
+
+export function inferEavBinding(fields: Field[]): EavBinding {
+  const entityKey =
+    fields.find(isFK) ??
+    fields.find((field) => !isPK(field) && nameOf(field).endsWith("_id"));
+  return {
+    entityKeyFieldId: idOf(entityKey),
+    propertyFieldId: idOf(
+      fields.find(
+        (field) => field !== entityKey && matches(field, PROPERTY_RE),
+      ),
+    ),
+    valueFieldId: idOf(fields.find((field) => matches(field, VALUE_RE))),
+    definitionTableId: null,
+    labelFieldId: null,
+    typeFieldId: null,
+  };
+}
+
 const findByPriority = (fields: Field[], patterns: RegExp[]) =>
   patterns
     .map((pattern) => fields.find((field) => matches(field, pattern)))
@@ -367,6 +468,91 @@ export function inferDefinitionColumns(fields: Field[]): DefinitionColumns {
       fields.find((field) => matches(field, DEFINITION_TYPE_RE)),
     ),
   };
+}
+
+const isConcreteTable = <T extends SchemaTable>(
+  table: T,
+): table is T & { id: TableId } => typeof table.id === "number";
+
+export function findTargetTable<T extends SchemaTable>(
+  field: Field | undefined,
+  schemaTables: T[],
+) {
+  const targetFieldId = field?.fk_target_field_id;
+  return targetFieldId == null
+    ? undefined
+    : schemaTables
+        .filter(isConcreteTable)
+        .find((table) =>
+          (table.fields ?? []).some(({ id }) => id === targetFieldId),
+        );
+}
+
+export function inferEavDefinition(
+  table: TableShape,
+  propertyFieldId: FieldId | null,
+  schemaTables: SchemaTable[],
+): EavDefinitionInference {
+  const propertyField = table.fields.find(
+    (field) => idOf(field) === propertyFieldId,
+  );
+  const targetTable = findTargetTable(propertyField, schemaTables);
+  const baseName = table.name
+    .toLowerCase()
+    .replace(DEFINITION_SIBLING_SUFFIX_RE, "");
+  const siblingNames = [baseName, baseName.replace(/(^|_)custom_/, "$1")];
+  const siblingTable = schemaTables
+    .filter(isConcreteTable)
+    .find(
+      (candidate) =>
+        candidate.name !== table.name &&
+        siblingNames.includes(candidate.name.toLowerCase()),
+    );
+  const definitionTable = targetTable ?? siblingTable;
+  if (!definitionTable) {
+    return {
+      definitionTableId: null,
+      labelFieldId: null,
+      typeFieldId: null,
+      signal: t`no table of field definitions was found`,
+    };
+  }
+  const { labelFieldId, typeFieldId } = inferDefinitionColumns(
+    definitionTable.fields ?? [],
+  );
+  return {
+    definitionTableId: definitionTable.id,
+    labelFieldId,
+    typeFieldId,
+    signal:
+      targetTable && propertyField
+        ? t`${propertyField.name} links to ${definitionTable.name}`
+        : t`it's named like ${table.name} without its suffix`,
+  };
+}
+
+export function inferCustomPropertyFacet(
+  field: Pick<Field, "name">,
+): CustomPropertyFacet | null {
+  const match = WILDCARD_RE.exec(field.name.toLowerCase());
+  return match ? { prefix: `${match[1]}_`, suffix: match[2] } : null;
+}
+
+export function inferWildcardDefinitionTable<T extends SchemaTable>(
+  table: Pick<Table, "name">,
+  schemaTables: T[],
+) {
+  const stem = table.name.toLowerCase().replace(/s$/, "");
+  return schemaTables.filter(isConcreteTable).find((candidate) => {
+    const { labelFieldId, typeFieldId } = inferDefinitionColumns(
+      candidate.fields ?? [],
+    );
+    return (
+      candidate.name.toLowerCase().startsWith(`${stem}_`) &&
+      labelFieldId != null &&
+      typeFieldId != null
+    );
+  });
 }
 
 /** The date a table is naturally viewed over time by, and why it was picked */

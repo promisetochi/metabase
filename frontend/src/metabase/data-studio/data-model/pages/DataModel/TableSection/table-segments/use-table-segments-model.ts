@@ -28,7 +28,7 @@ import {
   useSegmentSettings,
   useTableSegments,
 } from "metabase/metadata/table-segments";
-import { useTableStructures } from "metabase/metadata/table-structure";
+import { isRoleA, useTableStructures } from "metabase/metadata/table-structure";
 import * as Lib from "metabase-lib";
 import type { DatasetQuery, FieldId, Segment, Table } from "metabase-types/api";
 
@@ -265,15 +265,24 @@ export function useTableSegmentsModel(table: Table): TableSegmentsModel {
   const fields = table.fields ?? [];
   const customSegments = table.segments ?? [];
   const overrides = getTableSegmentsOverrides(table);
-  const { mainDateField, periodGranularity } = getTableStructure(table);
+  const {
+    mainDateField,
+    periodGranularity,
+    role: tableRole,
+    history,
+  } = getTableStructure(table);
   const { fieldTypes } = useTableSemantics(table);
+  const currentVersion =
+    tableRole != null && isRoleA(tableRole, "role/HistoryDimension")
+      ? history
+      : undefined;
   const { getSegmentSettings } = useSegmentSettings();
   const settings = getSegmentSettings(table.db_id, table.schema);
   const generationOffSignal = getGenerationOffSignal(settings);
 
   const getInference = (role: SystemSegmentRole): SystemSegmentInference =>
     generationOffSignal == null
-      ? inferSystemSegment(fields, role)
+      ? inferSystemSegment(fields, role, currentVersion)
       : { conditions: [], signal: generationOffSignal, confidence: "high" };
 
   // Sync makes a segment only for conditions the table has columns for; one
@@ -338,7 +347,7 @@ export function useTableSegmentsModel(table: Table): TableSegmentsModel {
 
   const defaultInference: DefaultSegmentInference =
     generationOffSignal == null
-      ? inferDefaultSegment(fields)
+      ? inferDefaultSegment(fields, currentVersion)
       : {
           segment: { type: "all" },
           signal: generationOffSignal,

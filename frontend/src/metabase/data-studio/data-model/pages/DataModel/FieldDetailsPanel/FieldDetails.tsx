@@ -21,16 +21,34 @@ import {
   getFieldRawName,
 } from "metabase/metadata/utils/field";
 import { Box, Code, Stack, Switch, Tabs } from "metabase/ui";
+import { isFK, isPK } from "metabase-lib/v1/types/utils/isa";
 import type { Field, FieldId, Table } from "metabase-types/api";
 
 import { trackMetadataChange } from "../../../analytics";
 import { DetailsEditableText } from "../DetailPanel";
 
+import { ChangesOverTimeSection } from "./ChangesOverTime";
+import { CustomFieldSection } from "./CustomFieldSection";
+import { FieldHierarchyRow } from "./FieldHierarchyRow";
+import {
+  FieldCorrectionInput,
+  FieldHistoryRoleInput,
+  useIsHistoryAttribute,
+  useIsHistoryTable,
+} from "./FieldHistoryRoleInput";
 import { FieldSemanticsSection } from "./FieldSemanticsSection";
+import { GroupingsSection, useCanHaveGroupings } from "./GroupingsSection";
+import { ValueOrderSection, useHasValueKind } from "./ValueOrderSection";
 
-type FieldTab = "details" | "behavior" | "formatting";
+type FieldTab = "details" | "order" | "values" | "behavior" | "formatting";
 
-const FIELD_TABS: FieldTab[] = ["details", "behavior", "formatting"];
+const FIELD_TABS: FieldTab[] = [
+  "details",
+  "order",
+  "values",
+  "behavior",
+  "formatting",
+];
 
 // The last tab picked, so the next field opens on it; resets on reload
 let lastPickedTab: FieldTab = "details";
@@ -39,20 +57,40 @@ interface FieldDetailsProps {
   field: Field;
   table: Table;
   getFieldHref: (fieldId: FieldId) => string;
+  /** Where the field's hierarchies are listed; without it they don't link */
+  hierarchiesHref?: string;
 }
 
 /**
- * A field's settings in the drawer, in tabs: its details and metadata, and
- * the shared behavior and formatting.
+ * A field's settings in the drawer, in tabs: its details and metadata, how
+ * its values relate and group, and the shared behavior and formatting.
  */
-export function FieldDetails({ field, table }: FieldDetailsProps) {
+export function FieldDetails({
+  field,
+  table,
+  hierarchiesHref,
+}: FieldDetailsProps) {
   const readOnly = !table.can_write;
+  const isHistoryTable = useIsHistoryTable(table);
+  const canChangeOverTime = !isHistoryTable && !isPK(field) && !isFK(field);
+  const isHistoryAttribute = useIsHistoryAttribute(field, table);
   const { handleNameChange, handleDescriptionChange } = useFieldUpdateHandlers({
     field,
   });
   // PROTOTYPE: the tab lives in state, not the URL. Each field remounts this,
   // so it starts on the last tab picked for any field
   const [tab, setTab] = useState<FieldTab>(() => lastPickedTab);
+  const hasValueKind = useHasValueKind(field);
+  const canHaveGroupings = useCanHaveGroupings(field, table);
+  // A field without the picked tab falls back to Details
+  const isTabShown: Record<FieldTab, boolean> = {
+    details: true,
+    order: hasValueKind,
+    values: canHaveGroupings,
+    behavior: true,
+    formatting: true,
+  };
+  const visibleTab = isTabShown[tab] ? tab : "details";
   const saveName = (value: string) => {
     const name = value.trim();
     if (name.length > 0 && name !== field.display_name) {
@@ -71,6 +109,8 @@ export function FieldDetails({ field, table }: FieldDetailsProps) {
     // Bleeds into the panel's padding so the border spans the drawer
     <Tabs.List mx="-xl" px="xl">
       <Tabs.Tab value="details">{t`Details`}</Tabs.Tab>
+      {hasValueKind && <Tabs.Tab value="order">{t`Values`}</Tabs.Tab>}
+      {canHaveGroupings && <Tabs.Tab value="values">{t`Buckets`}</Tabs.Tab>}
       <Tabs.Tab value="behavior">{t`Behavior`}</Tabs.Tab>
       <Tabs.Tab value="formatting">{t`Formatting`}</Tabs.Tab>
     </Tabs.List>
@@ -78,7 +118,7 @@ export function FieldDetails({ field, table }: FieldDetailsProps) {
 
   return (
     <Tabs
-      value={tab}
+      value={visibleTab}
       onChange={(value) => {
         const next = FIELD_TABS.find((known) => known === value);
         if (next) {
@@ -143,11 +183,60 @@ export function FieldDetails({ field, table }: FieldDetailsProps) {
                   }
                 />
               )}
+              {isHistoryTable && (
+                <DetailsRow
+                  label={t`History`}
+                  value={
+                    <FieldHistoryRoleInput
+                      field={field}
+                      table={table}
+                      disabled={readOnly}
+                    />
+                  }
+                />
+              )}
+              {isHistoryTable && isHistoryAttribute && (
+                <DetailsRow
+                  label={t`Changes`}
+                  value={
+                    <FieldCorrectionInput
+                      field={field}
+                      table={table}
+                      disabled={readOnly}
+                    />
+                  }
+                />
+              )}
+              <FieldHierarchyRow
+                field={field}
+                table={table}
+                hierarchiesHref={hierarchiesHref}
+              />
             </DetailsTable>
           </SidebarSection>
+          <CustomFieldSection field={field} table={table} />
           <FieldSemanticsSection field={field} table={table} />
+          {canChangeOverTime && (
+            <ChangesOverTimeSection
+              field={field}
+              table={table}
+              disabled={readOnly}
+            />
+          )}
         </Stack>
       </Tabs.Panel>
+
+      {hasValueKind && (
+        <Tabs.Panel value="order">
+          <ValueOrderSection field={field} table={table} />
+        </Tabs.Panel>
+      )}
+
+      {canHaveGroupings && (
+        <Tabs.Panel value="values">
+          <GroupingsSection field={field} table={table} />
+        </Tabs.Panel>
+      )}
 
       {/* One section each, so the tab names and frames them: no card */}
       <Tabs.Panel value="behavior">
