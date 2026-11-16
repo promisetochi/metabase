@@ -31,6 +31,11 @@ function getTabs(
   });
 
   tabs.push({
+    label: t`Metadata`,
+    to: Urls.dataStudioTableMetadata(table.id),
+  });
+
+  tabs.push({
     label: t`Fields`,
     to: Urls.dataStudioTableFields(table.id),
     isSelected: location.pathname.startsWith(

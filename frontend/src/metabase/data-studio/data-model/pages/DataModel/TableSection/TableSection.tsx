@@ -42,6 +42,7 @@ import { TableCollection } from "./TableCollection";
 import { TableMetadata } from "./TableMetadata";
 import S from "./TableSection.module.css";
 import { TableSectionGroup } from "./TableSectionGroup";
+import { TableStructure } from "./TableStructure";
 
 interface Props {
   table: Table;
@@ -200,6 +201,8 @@ const TableSectionBase = ({
               </Group>
 
               <TableAttributesEditSingle table={table} onUpdate={onUpdate} />
+
+              <TableStructure table={table} readOnly={readOnly} />
 
               <TableSectionGroup title={t`Metadata`}>
                 <TableMetadata table={table} />

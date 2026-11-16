@@ -12,6 +12,12 @@ import { t } from "ttag";
 import { useListUsersQuery } from "metabase/api";
 import { useNumberFormatter } from "metabase/common/hooks/use-number-formatter";
 import {
+  getTableRoleIcon,
+  getTableRoleLabel,
+  useTableFields,
+  useTableStructures,
+} from "metabase/metadata/table-structure";
+import {
   DATA_LAYER_ICONS,
   getDataLayerLabel,
 } from "metabase/metadata/utils/data-layer";
@@ -22,10 +28,11 @@ import {
   EntityNameCell,
   Group,
   Icon,
+  Text,
   TreeTable,
   useTreeTableInstance,
 } from "metabase/ui";
-import type { UserId } from "metabase-types/api";
+import type { Table, UserId } from "metabase-types/api";
 
 import { useSelection } from "../../contexts/SelectionContext";
 import {
@@ -224,6 +231,15 @@ export function TablePickerTreeTable({
             name={row.original.name}
           />
         ),
+      },
+      {
+        id: "role",
+        header: t`Role`,
+        width: 280,
+        cell: ({ row }) =>
+          row.original.type === "table" && row.original.table ? (
+            <TableRoleCell table={row.original.table} />
+          ) : null,
       },
       {
         id: "owner",
@@ -454,6 +470,31 @@ export function TablePickerTreeTable({
       getRowProps={getRowProps}
       ariaLabel={t`Tables`}
     />
+  );
+}
+
+/** PROTOTYPE: mocked. The table's role, with an icon for what kind it is. */
+function TableRoleCell({ table }: { table: Table }) {
+  const fields = useTableFields(table);
+  const { getTableStructure } = useTableStructures();
+
+  if (fields == null) {
+    return null;
+  }
+
+  const { role } = getTableStructure({ ...table, fields });
+
+  return (
+    <Group gap="xs" wrap="nowrap" miw={0} data-testid="table-role">
+      {role ? (
+        <Group gap="sm" wrap="nowrap" flex="0 0 auto">
+          <Icon name={getTableRoleIcon(role)} c="text-secondary" />
+          <Text truncate>{getTableRoleLabel(role)}</Text>
+        </Group>
+      ) : (
+        <Text c="text-secondary">{t`No role`}</Text>
+      )}
+    </Group>
   );
 }
 

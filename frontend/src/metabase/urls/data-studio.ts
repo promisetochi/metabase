@@ -121,6 +121,10 @@ export function dataStudioTable(tableId: TableId) {
   return `${dataStudioLibrary()}/tables/${tableId}`;
 }
 
+export function dataStudioTableMetadata(tableId: TableId) {
+  return `${dataStudioTable(tableId)}/metadata`;
+}
+
 export function dataStudioTableFields(tableId: TableId, fieldId?: FieldId) {
   const baseUrl = `${dataStudioLibrary()}/tables/${tableId}/fields`;
   return fieldId != null ? `${baseUrl}/${fieldId}` : baseUrl;
