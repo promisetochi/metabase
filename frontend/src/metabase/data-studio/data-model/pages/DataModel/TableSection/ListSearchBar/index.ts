@@ -1,0 +1,1 @@
+export { matchesListSearch } from "./ListSearchBar";
