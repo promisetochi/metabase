@@ -5,6 +5,8 @@
    [clojure.test :refer :all]
    [metabase.collections.models.collection :as collection]
    [metabase.explorations.api]
+   [metabase.explorations.query-plan.mbql :as qp.mbql]
+   [metabase.lib.core :as lib]
    [metabase.test :as mt]
    [metabase.test.fixtures :as fixtures]
    [toucan2.core :as t2]))
@@ -86,6 +88,34 @@
         (let [second-resp (mt/user-http-request :rasta :post 200 "exploration/from-card" {:card_id (:id ok)})]
           (is (= 1 (count (metrics-named "Revenue by product"))))
           (is (= (:id (first metrics)) (prepared-metric-id second-resp))))))))
+
+(defn- default-time-dimension
+  "What Research reads as the date dimension of the metric with `metric-id`: `[column unit display-name]`, or nil."
+  [metric-id]
+  (let [card (t2/select-one :model/Card :id metric-id)]
+    (qp.mbql/default-time-dimension-col (lib/query (mt/metadata-provider) (:dataset_query card)) card)))
+
+(deftest prepare-from-a-chart-by-date-keeps-the-date-as-the-default-dimension-test
+  ;; Each chart has its own aggregation: two charts that say the same thing share one metric, and the second would reuse
+  ;; the first's instead of making its own.
+  (mt/with-temp [:model/Card by-month   (chart "Revenue by month" {:aggregation [[:sum $total]]
+                                                                   :breakout    [!month.created_at]})
+                 :model/Card by-week    (chart "Average order by week" {:aggregation [[:avg $total]]
+                                                                        :breakout    [$product_id !week.created_at]})
+                 :model/Card by-product (chart "Orders by product" {:aggregation [[:count]]
+                                                                    :breakout    [$product_id]})]
+    (letfn [(prepare [card]
+              (prepared-metric-id (mt/user-http-request :rasta :post 200 "exploration/from-card" {:card_id (:id card)})))]
+      (testing "the date a chart was broken out by is the metric's default dimension, at the chart's unit"
+        (let [[column unit] (default-time-dimension (prepare by-month))]
+          (is (= (mt/id :orders :created_at) (:id column)))
+          (is (= :month unit))))
+      (testing "the date wins over another breakout, whatever its place, and keeps its own unit"
+        (let [[column unit] (default-time-dimension (prepare by-week))]
+          (is (= (mt/id :orders :created_at) (:id column)))
+          (is (= :week unit))))
+      (testing "a chart with no date breakout gives a metric with no default dimension"
+        (is (nil? (default-time-dimension (prepare by-product))))))))
 
 (deftest prepare-with-a-chosen-metric-test
   (mt/with-temp [:model/Card ok      (chart "Revenue by product" {:aggregation [[:sum $total]] :breakout [$product_id]})

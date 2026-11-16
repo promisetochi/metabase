@@ -1,9 +1,10 @@
 (ns metabase.explorations.from-card
-  "Starting a Research from a chart.
+  "Planning a Research from a dashboard chart.
 
   Research works on metrics, and a metric is a saved aggregation. A chart on a dashboard is usually one aggregation with
   a breakdown, so the metric behind it is the chart's query with the breakdown, the sort and the limit taken off
-  ([[derive-metric-query]]).
+  ([[derive-metric-query]]). When the chart was broken out by date, that date column stays as the metric's default
+  dimension, so Research can show a breakdown over time ([[create-metric!]]).
 
   Before a metric is created, [[find-matches]] looks for one that already says the same thing, or nearly the same
   thing, so the person is not left with a pile of near-duplicates:
@@ -18,11 +19,14 @@
    [metabase.explorations.db :as explorations.db]
    [metabase.explorations.impl :as impl]
    [metabase.lib-be.core :as lib-be]
+   [metabase.lib-metric.core :as lib-metric]
    [metabase.lib.core :as lib]
+   [metabase.metrics.core :as metrics]
    [metabase.models.interface :as mi]
    [metabase.queries.core :as queries]
    [metabase.query-permissions.core :as query-perms]
-   [metabase.util.i18n :refer [tru]]))
+   [metabase.util.i18n :refer [tru]]
+   [metabase.util.log :as log]))
 
 (set! *warn-on-reflection* true)
 
@@ -179,23 +183,60 @@
       metric     {:eligible true :metric (slim metric)}
       :else      (assoc (find-matches query) :eligible true))))
 
+(defn- chart-date-breakout
+  "The first breakout of the chart behind `source-card` that is on a date column, as `{:key <column key> :unit <unit>}`, or
+  nil when the chart is not broken out by date. The key is the column without its bucketing, which is how a metric's
+  dimension mappings name a column."
+  [source-card]
+  (some (fn [breakout]
+          (when-let [unit (lib/raw-temporal-bucket breakout)]
+            {:key  (-> breakout
+                       (lib/with-temporal-bucket nil)
+                       (lib/with-binning nil)
+                       lib-metric/field-ref->key)
+             :unit unit}))
+        (lib/breakouts (card-query source-card))))
+
+(defn- set-default-time-dimension!
+  "Make the date column the chart was broken out by the new metric's default dimension, at the chart's unit.
+
+  The breakouts are taken off to make the metric ([[derive-metric-query]]), but Research draws a dimension over time
+  (\"Revenue by Channel over time\") only for a metric that has a default date dimension. Without one, a question like
+  \"why did revenue fall in September?\" gets only all-time charts, which cannot show a fall. Best effort: when it fails the
+  metric is still fine for everything else, so the failure is logged and not raised."
+  [metric-id source-card]
+  (try
+    (when-let [{:keys [key unit]} (chart-date-breakout source-card)]
+      (metrics/sync-dimensions! :metadata/metric metric-id)
+      (when-let [dimension-id (some (fn [{:keys [target dimension-id]}]
+                                      (when (= key (lib-metric/field-ref->key target))
+                                        dimension-id))
+                                    (:dimension_mappings (explorations.db/card metric-id)))]
+        (metrics/set-default-dimension! :metadata/metric metric-id dimension-id)
+        (metrics/update-dimension! :metadata/metric metric-id dimension-id {:default_temporal_unit (name unit)})))
+    (catch Throwable e
+      (log/warnf e "Could not set the default date dimension of metric %d made from card %d" metric-id (:id source-card)))))
+
 (defn create-metric!
   "Save `derived-query` as a metric in the current user's personal collection, named after the chart it came from. Checks
-  what the REST endpoint for saving a card checks: the user can run the query, and can write to the collection."
+  what the REST endpoint for saving a card checks: the user can run the query, and can write to the collection. A chart
+  broken out by date gives the metric a default date dimension ([[set-default-time-dimension!]])."
   [derived-query source-card]
   (let [collection-id (:id (collection/user->personal-collection api/*current-user-id*))]
     (query-perms/check-run-permissions-for-query derived-query)
     (api/create-check :model/Card {:collection_id collection-id})
-    (queries/create-card!
-     {:name                   (tru "{0} (metric)" (:name source-card))
-      :type                   :metric
-      :dataset_query          derived-query
-      :display                :scalar
-      :description            (tru "Made from the question \"{0}\" so that it could be researched. Its breakdowns, sorting and limit were removed."
-                                   (:name source-card))
-      :collection_id          collection-id
-      :visualization_settings {}}
-     {:id api/*current-user-id*})))
+    (let [metric (queries/create-card!
+                  {:name                   (tru "{0} (metric)" (:name source-card))
+                   :type                   :metric
+                   :dataset_query          derived-query
+                   :display                :scalar
+                   :description            (tru "Made from the question \"{0}\" so that it could be researched. Its breakdowns, sorting and limit were removed."
+                                                (:name source-card))
+                   :collection_id          collection-id
+                   :visualization_settings {}}
+                  {:id api/*current-user-id*})]
+      (set-default-time-dimension! (:id metric) source-card)
+      metric)))
 
 (defn ensure-metric!
   "The metric to research for `card`: the card itself when it is a metric, the metric the caller chose (`metric-id`) when
