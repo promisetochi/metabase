@@ -52,6 +52,13 @@ const newSegmentPage = () =>
     Component: PublishedTableNewSegmentPage,
   }));
 
+const systemSegmentPage = () =>
+  import(
+    /* webpackChunkName: "data-studio-tables" */ "metabase/data-studio/segments/pages/PublishedTableSystemSegmentPage"
+  ).then(({ PublishedTableSystemSegmentPage }) => ({
+    Component: PublishedTableSystemSegmentPage,
+  }));
+
 const segmentDetailPage = () =>
   import(
     /* webpackChunkName: "data-studio-tables" */ "metabase/data-studio/segments/pages/PublishedTableSegmentDetailPage"
@@ -112,6 +119,7 @@ export function getDataStudioTableRoutes(IsAdmin: ComponentType) {
       <Route path=":tableId/segments/new" element={<IsAdmin />}>
         <Route index lazy={newSegmentPage} />
       </Route>
+      <Route path=":tableId/segments/system/:role" lazy={systemSegmentPage} />
       <Route path=":tableId/segments/:segmentId" lazy={segmentDetailPage} />
       <Route
         path=":tableId/segments/:segmentId/revisions"
