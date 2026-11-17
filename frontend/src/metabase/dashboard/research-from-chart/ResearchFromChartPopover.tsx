@@ -78,7 +78,7 @@ function getMetricSummary(
     const name = preview.exact.name;
     return t`This chart matches the metric "${name}", so that metric will be used.`;
   }
-  return t`A metric will be saved to your personal collection from this chart, without its breakdown, so Research can slice it.`;
+  return t`A metric will be saved to your personal collection from this chart so Research can slice it.`;
 }
 
 export function ResearchFromChartPopover({
